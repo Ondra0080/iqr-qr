@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IQR (SPD) QR generátor – CZ faktury</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; line-height: 1.35; }
+    .wrap { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 24px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    h2 { font-size: 14px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .04em; color: #444; }
+    label { display: block; font-size: 13px; margin: 10px 0 6px; color: #333; }
+    input, textarea, select { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 10px; border: 1px solid #ccc; font-size: 14px; }
+    textarea { min-height: 74px; resize: vertical; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #111; background: #111; color: #fff; cursor: pointer; font-weight: 600; }
+    button.secondary { background: #fff; color: #111; border-color: #bbb; }
+    .btns { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    .hint { font-size: 12px; color: #555; margin-top: 8px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #f7f7f7; border-radius: 10px; padding: 10px; border: 1px solid #eee; font-size: 12px; }
+    #qrcode { display: grid; place-items: center; min-height: 280px; }
+    .ok { color: #0a7; font-size: 12px; }
+    .bad { color: #b00; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>IQR (SPD) QR generátor pro CZ faktury</h1>
+
+      <h2>Uložené defaulty</h2>
+      <label>IBAN příjemce (ACC) – povinné</label>
+      <input id="acc" placeholder="CZ6508000000192000145399" autocomplete="off" />
+
+      <label>Název příjemce (RN) – volitelné</label>
+      <input id="rn" placeholder="Moje firma s.r.o." autocomplete="off" />
+
+      <label>BIC/SWIFT (BIC) – volitelné</label>
+      <input id="bic" placeholder="GIBACZPX" autocomplete="off" />
+
+      <div class="row">
+        <div>
+          <label>Měna (CC)</label>
+          <select id="cc">
+            <option value="CZK">CZK</option>
+            <option value="EUR">EUR</option>
+          </select>
+        </div>
+        <div>
+          <label>Konstantní symbol (X-KS) – volitelné</label>
+          <input id="xks" placeholder="0308" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="btns">
+        <button class="secondary" id="saveDefaults">Uložit defaulty</button>
+        <button class="secondary" id="loadDefaults">Načíst defaulty</button>
+        <button class="secondary" id="clearDefaults">Smazat uložené</button>
+      </div>
+      <div id="defaultsStatus" class="hint"></div>
+
+      <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
+
+      <h2>Údaje pro konkrétní fakturu</h2>
+
+      <div class="row">
+        <div>
+          <label>Částka (AM) – povinné</label>
+          <input id="am" placeholder="12500.00" inputmode="decimal" />
+          <div class="hint">Používej tečku (.) a dvě desetinná místa.</div>
+        </div>
+        <div>
+          <label>Datum splatnosti (DT) – doporučeno</label>
+          <input id="dt" type="date" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Variabilní symbol (X-VS) – doporučeno</label>
+          <input id="xvs" placeholder="2025012" inputmode="numeric" />
+        </div>
+        <div>
+          <label>Specifický symbol (X-SS) – volitelné</label>
+          <input id="xss" placeholder="" inputmode="numeric" />
+        </div>
+      </div>
+
+      <label>Zpráva pro příjemce (MSG)</label>
+      <input id="msg" placeholder="Faktura 2025-012" />
+
+      <label>Poznámka (NT) – volitelné</label>
+      <input id="nt" placeholder="" />
+
+      <div class="btns">
+        <button id="generate">Vygenerovat QR</button>
+        <button class="secondary" id="downloadPng">Stáhnout PNG</button>
+      </div>
+
+      <div class="hint">
+        Základní řetězec SPD se zobrazuje níže (pro kontrolu nebo debug).
+      </div>
+      <pre id="spdOut"></pre>
+      <div id="validation" class="hint"></div>
+    </div>
+
+    <div class="card">
+      <h2>QR kód</h2>
+      <div id="qrcode"></div>
+      <div class="hint">
+        Tip: pokud některá banka QR nechce načíst, bývá to nejčastěji špatný IBAN nebo formát částky.
+      </div>
+    </div>
+  </div>
+
+  <!-- QRCode.js (Tiny) -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+
+  <script>
+    const LS_KEY = "iqr_spd_defaults_v1";
+
+    const el = (id) => document.getElementById(id);
+    const qWrap = el("qrcode");
+    const spdOut = el("spdOut");
+    const validation = el("validation");
+    const defaultsStatus = el("defaultsStatus");
+
+    let qr = null;
+
+    function sanitizeMsg(s) {
+      // SPD snese diakritiku, ale některé čtečky jsou citlivé – doporučuju držet ASCII.
+      // Tady jen trim, nic agresivního.
+      return (s || "").trim();
+    }
+
+    function formatAmount(raw) {
+      const s = (raw || "").trim().replace(",", ".");
+      if (!s) return "";
+      // dovolíme čísla a jednu tečku
+      const cleaned = s.replace(/[^\d.]/g, "");
+      const parts = cleaned.split(".");
+      if (parts.length > 2) return "";
+      const intPart = parts[0] || "0";
+      const decPart = (parts[1] || "").slice(0, 2);
+      const dec = decPart.padEnd(2, "0");
+      return `${intPart}.${dec}`;
+    }
+
+    function isValidIbanCz(iban) {
+      // Neřešíme kompletní IBAN checksum, ale aspoň CZ + délka 24.
+      const s = (iban || "").replace(/\s+/g, "").toUpperCase();
+      return /^CZ\d{22}$/.test(s);
+    }
+
+    function buildSpd() {
+      const acc = el("acc").value.replace(/\s+/g, "").toUpperCase();
+      const rn  = sanitizeMsg(el("rn").value);
+      const bic = el("bic").value.replace(/\s+/g, "").toUpperCase();
+      const cc  = el("cc").value;
+      const xks = el("xks").value.trim();
+      const am  = formatAmount(el("am").value);
+      const dt  = el("dt").value; // YYYY-MM-DD
+      const xvs = el("xvs").value.trim();
+      const xss = el("xss").value.trim();
+      const msg = sanitizeMsg(el("msg").value);
+      const nt  = sanitizeMsg(el("nt").value);
+
+      // SPD formát: SPD*1.0*KEY:VAL*KEY:VAL...
+      const parts = ["SPD*1.0"];
+
+      if (acc) parts.push(`ACC:${acc}`);
+      if (am)  parts.push(`AM:${am}`);
+      if (cc)  parts.push(`CC:${cc}`);
+      if (msg) parts.push(`MSG:${msg}`);
+      if (dt)  parts.push(`DT:${dt.replaceAll("-", "")}`); // SPD obvykle YYYYMMDD
+      if (xvs) parts.push(`X-VS:${xvs}`);
+      if (xss) parts.push(`X-SS:${xss}`);
+      if (xks) parts.push(`X-KS:${xks}`);
+      if (rn)  parts.push(`RN:${rn}`);
+      if (bic) parts.push(`BIC:${bic}`);
+      if (nt)  parts.push(`NT:${nt}`);
+
+      return { spd: parts.join("*"), acc, am };
+    }
+
+    function validate({ acc, am }) {
+      const problems = [];
+      if (!acc) problems.push("Chybí IBAN (ACC).");
+      else if (!isValidIbanCz(acc)) problems.push("IBAN nevypadá jako CZ IBAN (CZ + 22 číslic).");
+      if (!am) problems.push("Chybí částka (AM).");
+      return problems;
+    }
+
+    function renderQr(spd) {
+      qWrap.innerHTML = "";
+      qr = new QRCode(qWrap, {
+        text: spd,
+        width: 280,
+        height: 280,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    }
+
+    function generate() {
+      const data = buildSpd();
+      spdOut.textContent = data.spd;
+
+      const probs = validate(data);
+      if (probs.length) {
+        validation.innerHTML = `<span class="bad">⚠ ${probs.join(" ")}</span>`;
+      } else {
+        validation.innerHTML = `<span class="ok">OK – QR by měl být načitelný.</span>`;
+      }
+
+      renderQr(data.spd);
+    }
+
+    function saveDefaults() {
+      const payload = {
+        acc: el("acc").value,
+        rn: el("rn").value,
+        bic: el("bic").value,
+        cc: el("cc").value,
+        xks: el("xks").value,
+      };
+      localStorage.setItem(LS_KEY, JSON.stringify(payload));
+      defaultsStatus.textContent = "Uloženo do prohlížeče.";
+      generate();
+    }
+
+    function loadDefaults() {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) { defaultsStatus.textContent = "Nic uloženého tu není."; return; }
+      try {
+        const p = JSON.parse(raw);
+        el("acc").value = p.acc || "";
+        el("rn").value  = p.rn  || "";
+        el("bic").value = p.bic || "";
+        el("cc").value  = p.cc  || "CZK";
+        el("xks").value = p.xks || "";
+        defaultsStatus.textContent = "Načteno.";
+        generate();
+      } catch {
+        defaultsStatus.textContent = "Uložená data jsou poškozená.";
+      }
+    }
+
+    function clearDefaults() {
+      localStorage.removeItem(LS_KEY);
+      defaultsStatus.textContent = "Smazáno.";
+    }
+
+    function downloadPng() {
+      // QRCode.js renderuje do <img> nebo <canvas> podle prostředí.
+      const img = qWrap.querySelector("img");
+      const canvas = qWrap.querySelector("canvas");
+
+      let dataUrl = null;
+      if (img && img.src) dataUrl = img.src;
+      else if (canvas) dataUrl = canvas.toDataURL("image/png");
+
+      if (!dataUrl) return;
+
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = "iqr-qr.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    el("generate").addEventListener("click", generate);
+    el("saveDefaults").addEventListener("click", saveDefaults);
+    el("loadDefaults").addEventListener("click", loadDefaults);
+    el("clearDefaults").addEventListener("click", clearDefaults);
+    el("downloadPng").addEventListener("click", downloadPng);
+
+    // default init
+    loadDefaults();
+
+    // chytré: když přepíšeš částku apod., můžeš generovat Enterem
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generate();
+    });
+
+    // pokud nic uloženého není, vygeneruj prázdný QR (aspoň UI)
+    generate();
+  </script>
+</body>
+</html>
