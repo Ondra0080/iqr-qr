@@ -7,7 +7,7 @@
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; line-height: 1.35; }
     .wrap { max-width: 980px; margin: 0 auto; display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 24px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; background:#fff; }
     h1 { font-size: 20px; margin: 0 0 12px; }
     h2 { font-size: 14px; margin: 0 0 10px; text-transform: uppercase; letter-spacing: .04em; color: #444; }
     label { display: block; font-size: 13px; margin: 10px 0 6px; color: #333; }
@@ -19,9 +19,11 @@
     .btns { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
     .hint { font-size: 12px; color: #555; margin-top: 8px; }
     pre { white-space: pre-wrap; word-break: break-word; background: #f7f7f7; border-radius: 10px; padding: 10px; border: 1px solid #eee; font-size: 12px; }
-    #qrcode { display: grid; place-items: center; min-height: 280px; }
+    #qrcode { display: grid; place-items: center; min-height: 300px; }
     .ok { color: #0a7; font-size: 12px; }
     .bad { color: #b00; font-size: 12px; }
+    .readonly { background:#fafafa; }
+    hr { border:none;border-top:1px solid #eee;margin:16px 0; }
   </style>
 </head>
 <body>
@@ -30,14 +32,21 @@
       <h1>IQR (SPD) QR generátor pro CZ faktury</h1>
 
       <h2>Uložené defaulty</h2>
-      <label>IBAN příjemce (ACC) – povinné</label>
-      <input id="acc" placeholder="CZ6508000000192000145399" autocomplete="off" />
 
-      <label>Název příjemce (RN) – volitelné</label>
-      <input id="rn" placeholder="Moje firma s.r.o." autocomplete="off" />
+      <label>Číslo účtu (CZ) – doporučeno (z toho se spočítá IBAN)</label>
+      <input id="czacc" placeholder="670100-2210425794/6210" autocomplete="off" />
 
-      <label>BIC/SWIFT (BIC) – volitelné</label>
-      <input id="bic" placeholder="GIBACZPX" autocomplete="off" />
+      <div class="row">
+        <div>
+          <label>Vypočtený IBAN (jen pro kontrolu)</label>
+          <input id="ibanPreview" class="readonly" readonly />
+          <div class="hint">QR platba používá IBAN uvnitř (ACC). Ty ale zadáváš CZ účet.</div>
+        </div>
+        <div>
+          <label>Název příjemce (RN) – volitelné</label>
+          <input id="rn" placeholder="Ondřej Bahula" autocomplete="off" />
+        </div>
+      </div>
 
       <div class="row">
         <div>
@@ -60,14 +69,14 @@
       </div>
       <div id="defaultsStatus" class="hint"></div>
 
-      <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
+      <hr>
 
       <h2>Údaje pro konkrétní fakturu</h2>
 
       <div class="row">
         <div>
           <label>Částka (AM) – povinné</label>
-          <input id="am" placeholder="12500.00" inputmode="decimal" />
+          <input id="am" placeholder="14700.00" inputmode="decimal" />
           <div class="hint">Používej tečku (.) a dvě desetinná místa.</div>
         </div>
         <div>
@@ -79,7 +88,7 @@
       <div class="row">
         <div>
           <label>Variabilní symbol (X-VS) – doporučeno</label>
-          <input id="xvs" placeholder="2025012" inputmode="numeric" />
+          <input id="xvs" placeholder="2601" inputmode="numeric" />
         </div>
         <div>
           <label>Specifický symbol (X-SS) – volitelné</label>
@@ -88,7 +97,7 @@
       </div>
 
       <label>Zpráva pro příjemce (MSG)</label>
-      <input id="msg" placeholder="Faktura 2025-012" />
+      <input id="msg" placeholder="Faktura 2601" />
 
       <label>Poznámka (NT) – volitelné</label>
       <input id="nt" placeholder="" />
@@ -98,9 +107,7 @@
         <button class="secondary" id="downloadPng">Stáhnout PNG</button>
       </div>
 
-      <div class="hint">
-        Základní řetězec SPD se zobrazuje níže (pro kontrolu nebo debug).
-      </div>
+      <div class="hint">SPD řetězec se zobrazuje níže (kontrola/debug).</div>
       <pre id="spdOut"></pre>
       <div id="validation" class="hint"></div>
     </div>
@@ -108,36 +115,31 @@
     <div class="card">
       <h2>QR kód</h2>
       <div id="qrcode"></div>
-      <div class="hint">
-        Tip: pokud některá banka QR nechce načíst, bývá to nejčastěji špatný IBAN nebo formát částky.
-      </div>
+      <div class="hint">Tip: kdyby banka QR nechtěla načíst, bývá to nejčastěji špatný účet nebo formát částky.</div>
     </div>
   </div>
 
-  <!-- QRCode.js (Tiny) -->
-  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <!-- Robustní QR knihovna -->
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
 
   <script>
-    const LS_KEY = "iqr_spd_defaults_v1";
+    const LS_KEY = "iqr_spd_defaults_v2_czacc";
 
     const el = (id) => document.getElementById(id);
     const qWrap = el("qrcode");
     const spdOut = el("spdOut");
     const validation = el("validation");
     const defaultsStatus = el("defaultsStatus");
+    const ibanPreview = el("ibanPreview");
 
-    let qr = null;
-
-    function sanitizeMsg(s) {
-      // SPD snese diakritiku, ale některé čtečky jsou citlivé – doporučuju držet ASCII.
-      // Tady jen trim, nic agresivního.
+    // --- helpers ---
+    function sanitizeText(s) {
       return (s || "").trim();
     }
 
     function formatAmount(raw) {
       const s = (raw || "").trim().replace(",", ".");
       if (!s) return "";
-      // dovolíme čísla a jednu tečku
       const cleaned = s.replace(/[^\d.]/g, "");
       const parts = cleaned.split(".");
       if (parts.length > 2) return "";
@@ -147,82 +149,133 @@
       return `${intPart}.${dec}`;
     }
 
-    function isValidIbanCz(iban) {
-      // Neřešíme kompletní IBAN checksum, ale aspoň CZ + délka 24.
+    function normalizeCzAccount(input) {
+      // přijme: "2210425794/6210" nebo "670100-2210425794/6210" (mezery/tečky ignoruje)
+      const s = (input || "").trim().replace(/\s+/g, "");
+      if (!s) return null;
+
+      const m = s.match(/^(\d{1,6}-)?(\d{1,10})\/(\d{4})$/);
+      if (!m) return null;
+
+      const prefix = (m[1] ? m[1].slice(0, -1) : "0"); // bez "-"
+      const account = m[2];
+      const bank = m[3];
+
+      return {
+        prefix: prefix.padStart(6, "0"),
+        account: account.padStart(10, "0"),
+        bank: bank
+      };
+    }
+
+    function mod97(numStr) {
+      // bezpečný mod 97 pro dlouhé číslo jako string
+      let remainder = 0;
+      for (let i = 0; i < numStr.length; i++) {
+        const ch = numStr.charCodeAt(i) - 48;
+        if (ch < 0 || ch > 9) continue;
+        remainder = (remainder * 10 + ch) % 97;
+      }
+      return remainder;
+    }
+
+    function czAccountToIban(czaccInput) {
+      // CZ IBAN: CZkk + bank(4) + prefix(6) + account(10)
+      const norm = normalizeCzAccount(czaccInput);
+      if (!norm) return "";
+
+      const bban = `${norm.bank}${norm.prefix}${norm.account}`; // 4+6+10 = 20
+      // checksum: move country code + 00 to end => bban + "CZ00"
+      // letters: C=12, Z=35 => "CZ00" => "123500"
+      const checkBase = bban + "123500";
+      const r = mod97(checkBase);
+      const check = String(98 - r).padStart(2, "0");
+      return `CZ${check}${bban}`;
+    }
+
+    function isValidCzIban(iban) {
       const s = (iban || "").replace(/\s+/g, "").toUpperCase();
       return /^CZ\d{22}$/.test(s);
     }
 
-    function buildSpd() {
-      const acc = el("acc").value.replace(/\s+/g, "").toUpperCase();
-      const rn  = sanitizeMsg(el("rn").value);
-      const bic = el("bic").value.replace(/\s+/g, "").toUpperCase();
-      const cc  = el("cc").value;
-      const xks = el("xks").value.trim();
-      const am  = formatAmount(el("am").value);
-      const dt  = el("dt").value; // YYYY-MM-DD
-      const xvs = el("xvs").value.trim();
-      const xss = el("xss").value.trim();
-      const msg = sanitizeMsg(el("msg").value);
-      const nt  = sanitizeMsg(el("nt").value);
-
-      // SPD formát: SPD*1.0*KEY:VAL*KEY:VAL...
-      const parts = ["SPD*1.0"];
-
-      if (acc) parts.push(`ACC:${acc}`);
-      if (am)  parts.push(`AM:${am}`);
-      if (cc)  parts.push(`CC:${cc}`);
-      if (msg) parts.push(`MSG:${msg}`);
-      if (dt)  parts.push(`DT:${dt.replaceAll("-", "")}`); // SPD obvykle YYYYMMDD
-      if (xvs) parts.push(`X-VS:${xvs}`);
-      if (xss) parts.push(`X-SS:${xss}`);
-      if (xks) parts.push(`X-KS:${xks}`);
-      if (rn)  parts.push(`RN:${rn}`);
-      if (bic) parts.push(`BIC:${bic}`);
-      if (nt)  parts.push(`NT:${nt}`);
-
-      return { spd: parts.join("*"), acc, am };
+    function updateIbanPreview() {
+      const iban = czAccountToIban(el("czacc").value);
+      ibanPreview.value = iban || "";
+      return iban;
     }
 
-    function validate({ acc, am }) {
+    // --- SPD building ---
+    function buildSpd() {
+      const czacc = el("czacc").value.trim();
+      const iban = czAccountToIban(czacc).replace(/\s+/g, "").toUpperCase();
+
+      const rn  = sanitizeText(el("rn").value);
+      const cc  = el("cc").value;
+      const xks = el("xks").value.trim();
+
+      const am  = formatAmount(el("am").value);
+      const dt  = el("dt").value; // YYYY-MM-DD
+
+      const xvs = el("xvs").value.trim();
+      const xss = el("xss").value.trim();
+
+      const msg = sanitizeText(el("msg").value);
+      const nt  = sanitizeText(el("nt").value);
+
+      const parts = ["SPD*1.0"];
+      if (iban) parts.push(`ACC:${iban}`);
+      if (am)   parts.push(`AM:${am}`);
+      if (cc)   parts.push(`CC:${cc}`);
+      if (msg)  parts.push(`MSG:${msg}`);
+      if (dt)   parts.push(`DT:${dt.replaceAll("-", "")}`); // YYYYMMDD
+      if (xvs)  parts.push(`X-VS:${xvs}`);
+      if (xss)  parts.push(`X-SS:${xss}`);
+      if (xks)  parts.push(`X-KS:${xks}`);
+      if (rn)   parts.push(`RN:${rn}`);
+      if (nt)   parts.push(`NT:${nt}`);
+
+      return { spd: parts.join("*"), iban, am };
+    }
+
+    function validate(data) {
       const problems = [];
-      if (!acc) problems.push("Chybí IBAN (ACC).");
-      else if (!isValidIbanCz(acc)) problems.push("IBAN nevypadá jako CZ IBAN (CZ + 22 číslic).");
-      if (!am) problems.push("Chybí částka (AM).");
+      if (!data.iban) problems.push("Chybí / neplatný CZ účet (nejde spočítat IBAN).");
+      else if (!isValidCzIban(data.iban)) problems.push("IBAN nevypadá jako CZ IBAN (CZ + 22 číslic).");
+      if (!data.am) problems.push("Chybí částka (AM).");
       return problems;
     }
 
-    function renderQr(spd) {
-      qWrap.innerHTML = "";
-      qr = new QRCode(qWrap, {
-        text: spd,
-        width: 280,
-        height: 280,
-        correctLevel: QRCode.CorrectLevel.M
-      });
+    async function renderQr(spd) {
+      qWrap.innerHTML = '<canvas id="qrCanvas" width="280" height="280"></canvas>';
+      const canvas = document.getElementById("qrCanvas");
+      await QRCode.toCanvas(canvas, spd, { errorCorrectionLevel: "M", width: 280 });
     }
 
-    function generate() {
+    async function generate() {
+      updateIbanPreview();
+
       const data = buildSpd();
       spdOut.textContent = data.spd;
 
       const probs = validate(data);
       if (probs.length) {
         validation.innerHTML = `<span class="bad">⚠ ${probs.join(" ")}</span>`;
+        qWrap.innerHTML = "";
+        return;
       } else {
         validation.innerHTML = `<span class="ok">OK – QR by měl být načitelný.</span>`;
       }
 
-      renderQr(data.spd);
+      await renderQr(data.spd);
     }
 
+    // --- defaults storage ---
     function saveDefaults() {
       const payload = {
-        acc: el("acc").value,
+        czacc: el("czacc").value,
         rn: el("rn").value,
-        bic: el("bic").value,
         cc: el("cc").value,
-        xks: el("xks").value,
+        xks: el("xks").value
       };
       localStorage.setItem(LS_KEY, JSON.stringify(payload));
       defaultsStatus.textContent = "Uloženo do prohlížeče.";
@@ -234,11 +287,10 @@
       if (!raw) { defaultsStatus.textContent = "Nic uloženého tu není."; return; }
       try {
         const p = JSON.parse(raw);
-        el("acc").value = p.acc || "";
-        el("rn").value  = p.rn  || "";
-        el("bic").value = p.bic || "";
-        el("cc").value  = p.cc  || "CZK";
-        el("xks").value = p.xks || "";
+        el("czacc").value = p.czacc || "670100-2210425794/6210";
+        el("rn").value    = p.rn    || "Ondřej Bahula";
+        el("cc").value    = p.cc    || "CZK";
+        el("xks").value   = p.xks   || "0308";
         defaultsStatus.textContent = "Načteno.";
         generate();
       } catch {
@@ -249,42 +301,49 @@
     function clearDefaults() {
       localStorage.removeItem(LS_KEY);
       defaultsStatus.textContent = "Smazáno.";
+      generate();
     }
 
     function downloadPng() {
-      // QRCode.js renderuje do <img> nebo <canvas> podle prostředí.
-      const img = qWrap.querySelector("img");
       const canvas = qWrap.querySelector("canvas");
+      if (!canvas) return;
 
-      let dataUrl = null;
-      if (img && img.src) dataUrl = img.src;
-      else if (canvas) dataUrl = canvas.toDataURL("image/png");
-
-      if (!dataUrl) return;
+      const dataUrl = canvas.toDataURL("image/png");
+      const vs = (el("xvs").value || "").trim();
+      const am = formatAmount(el("am").value) || "";
+      const file = vs ? `iqr-qr_VS-${vs}${am ? `_AM-${am}` : ""}.png` : "iqr-qr.png";
 
       const a = document.createElement("a");
       a.href = dataUrl;
-      a.download = "iqr-qr.png";
+      a.download = file;
       document.body.appendChild(a);
       a.click();
       a.remove();
     }
 
+    // --- wire UI ---
     el("generate").addEventListener("click", generate);
     el("saveDefaults").addEventListener("click", saveDefaults);
     el("loadDefaults").addEventListener("click", loadDefaults);
     el("clearDefaults").addEventListener("click", clearDefaults);
     el("downloadPng").addEventListener("click", downloadPng);
 
-    // default init
-    loadDefaults();
-
-    // chytré: když přepíšeš částku apod., můžeš generovat Enterem
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) generate();
+    // live preview of IBAN
+    el("czacc").addEventListener("input", () => {
+      updateIbanPreview();
     });
 
-    // pokud nic uloženého není, vygeneruj prázdný QR (aspoň UI)
+    // init with your defaults (and then load saved if exists)
+    el("czacc").value = "670100-2210425794/6210";
+    el("rn").value = "Ondřej Bahula";
+    el("cc").value = "CZK";
+    el("xks").value = "0308";
+    updateIbanPreview();
+
+    // if defaults exist, load them
+    loadDefaults();
+
+    // generate once on load
     generate();
   </script>
 </body>
